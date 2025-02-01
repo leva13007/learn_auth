@@ -5,3 +5,4 @@ yarn.lock
 textes/
 key.pem
 cert.pem
+cookies.txt
