@@ -208,22 +208,67 @@ const regenerateSession = (oldSessionId) => {
   return newSessionId;
 };
 
-router.get("/login", (req, res) => {
-  const { username, password } = req.query;
+const bcrypt = require('bcrypt');
+const users = {}; // { "email": { hash, salt } }
 
-  if (username !== "admin" || password !== "password") {
-    return res.end("❌ Wrong data!");
+function parseJSON(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+
+    req.on('data', chunk => {
+      body += chunk.toString(); // Додаємо отримані шматки даних
+    });
+
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(body)); // Парсимо JSON після отримання всього тіла
+      } catch (error) {
+        reject(new Error("Invalid JSON")); // Якщо JSON кривий, повертаємо помилку
+      }
+    });
+
+    req.on('error', reject);
+  });
+}
+
+router.post('/signup', async (req, res) => {
+  const body = await parseJSON(req);
+  const { email, password } = body;
+  
+  if (users[email]) {
+    res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end("This user is already registered");
   }
 
-  const cookies = req.headers.cookie || "";
-  const oldSessionId = cookies.split("; ").find(cookie => cookie.startsWith("sessionId="))?.split("=")[1];
-
-  const newSessionId = oldSessionId ? regenerateSession(oldSessionId) : Math.random().toString(36).substring(2);
-  console.log("🔹 Recieved sessionId:", oldSessionId, " => ", newSessionId);
-  if (oldSessionId) sessions[newSessionId] = { theme: "light", username, createdAt: new Date(), email, password };
+  const salt = await bcrypt.genSalt(12);
+  const hash = await bcrypt.hash(password, salt);
+  
+  users[email] = { hash, salt };
+  console.log("🔹 New user registered:", users[email]);
+  console.log("🔹 All users:", users);
+  
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader("Set-Cookie", `sessionId=${newSessionId}; HttpOnly; Secure; SameSite=Strict`);
-  res.end("✅ You are in! sessionId was updated.");
+  res.end("User is registered!");
+});
+
+router.post('/signin', async (req, res) => {
+  const body = await parseJSON(req);
+  const { email, password } = body;
+  
+  if (!users[email]) {
+    res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end("Current user is not registered");
+  }
+
+  const isValid = await bcrypt.compare(password, users[email].hash);
+  if (!isValid) {
+    console.log("🔹 Wrong password or email");
+    res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end("Wrong password or email");
+  }
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end("User is logged in!");
 });
 
 router.get("/read-session", (req, res) => {
