@@ -9,6 +9,7 @@
   "repository": "git@github.com:leva13007/learn_auth.git",
   "author": "Oleh Levchenko <leva13007@gmail.com>",
   "dependencies": {
-    "bcrypt": "^5.1.1"
+    "bcrypt": "^5.1.1",
+    "jsonwebtoken": "^9.0.2"
   }
 }

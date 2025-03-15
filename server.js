@@ -231,6 +231,16 @@ function parseJSON(req) {
   });
 }
 
+const fs = require('fs');
+const jwt = require('jsonwebtoken');
+const SECRET = 'superSecretKey';
+
+const refreshTokens = new Set();
+const accessRevokedTokens = new Set();
+
+const privateKey = fs.readFileSync('./private.key', 'utf8');
+const publicKey = fs.readFileSync('./public.key', 'utf8');
+
 router.post('/signup', async (req, res) => {
   const body = await parseJSON(req);
   const { email, password } = body;
@@ -247,8 +257,17 @@ router.post('/signup', async (req, res) => {
   console.log("🔹 New user registered:", users[email]);
   console.log("🔹 All users:", users);
   
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.end("User is registered!");
+  const accessToken = jwt.sign({ email }, privateKey, { algorithm: 'RS256', expiresIn: '15m' });
+  const refreshToken = jwt.sign({ email }, privateKey, { algorithm: 'RS256', expiresIn: '7d' });
+
+  refreshTokens.add(refreshToken);
+
+  res.setHeader('Set-Cookie', [
+    `refreshToken=${refreshToken}; HttpOnly; Secure; SameSite=Strict; Path=/refresh`,
+    `refreshToken=${refreshToken}; HttpOnly; Secure; SameSite=Strict; Path=/logout`
+  ]); 
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ accessToken }));
 });
 
 router.post('/signin', async (req, res) => {
@@ -267,8 +286,92 @@ router.post('/signin', async (req, res) => {
     return res.end("Wrong password or email");
   }
 
+  const accessToken = jwt.sign({ email }, privateKey, { algorithm: 'RS256', expiresIn: '15m' });
+  const refreshToken = jwt.sign({ email }, privateKey, { algorithm: 'RS256', expiresIn: '7d' });
+
+  refreshTokens.add(refreshToken);
+
+  res.setHeader('Set-Cookie', [
+    `refreshToken=${refreshToken}; HttpOnly; Secure; SameSite=Strict; Path=/refresh`,
+    `refreshToken=${refreshToken}; HttpOnly; Secure; SameSite=Strict; Path=/logout`
+  ]); 
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ accessToken }));
+});
+
+const authenticateToken = async(req, res, next) => {
+  const body = await parseJSON(req);
+  const accessToken = body.accessToken;
+
+  if (!accessToken) {
+    res.writeHead(401, { 'Content-Type': 'text/plain' });
+    return res.end("Access denied");
+  }
+
+  if (accessRevokedTokens.has(accessToken)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    return res.end("Token revoked");
+  }
+
+  jwt.verify(accessToken, publicKey, { algorithms: ['RS256'] }, (err, user) => {
+    if (err) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      return res.end("Invalid token");
+    }
+    req.user = user;
+    next();
+  });
+}
+
+router.get('/profile', authenticateToken, (req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ message: "Protected route", user: req.user }));
+});
+
+router.post('/refresh', async(req, res) => {
+  const body = await parseJSON(req);
+  const { email } = body;
+
+  const cookies = req.headers.cookie || '';
+  const oldToken = cookies.split('; ').find(cookie => cookie.startsWith('refreshToken='))?.split('=')[1];
+  console.log("🔹 Recieved refreshToken:", oldToken, cookies);
+
+  if (!oldToken) {
+    res.writeHead(401, { 'Content-Type': 'text/plain' });
+    return res.end('Access denied');
+  }
+
+  if (!refreshTokens.has(oldToken)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    return res.end('Token revoked');
+  }
+
+  refreshTokens.delete(oldToken); // Видаляємо старий
+  const accessToken = jwt.sign({ email }, privateKey, { algorithm: 'RS256', expiresIn: '15m' });
+  const newToken = jwt.sign({ email }, privateKey, { algorithm: 'RS256', expiresIn: '7d' });
+
+  refreshTokens.add(newToken); // Додаємо новий
+
+  res.setHeader('Set-Cookie', [
+    `refreshToken=${newToken}; HttpOnly; Secure; SameSite=Strict; Path=/refresh`,
+    `refreshToken=${newToken}; HttpOnly; Secure; SameSite=Strict; Path=/logout`
+  ]); 
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ accessToken }));
+});
+
+router.post('/logout', async(req, res) => {
+  const body = await parseJSON(req);
+  const accessToken = body.accessToken;
+
+  const cookies = req.headers.cookie || '';
+  const oldRefreshToken = cookies.split('; ').find(cookie => cookie.startsWith('refreshToken='))?.split('=')[1];
+
+  accessRevokedTokens.add(accessToken);
+  refreshTokens.delete(oldRefreshToken);
+  
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.end("User is logged in!");
+  res.end('Logout!');
 });
 
 router.get("/read-session", (req, res) => {
